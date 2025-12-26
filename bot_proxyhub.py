@@ -4,30 +4,25 @@ from bs4 import BeautifulSoup
 from telegram import Bot
 from telegram.constants import ParseMode
 
+# ======== تنظیمات =========
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-TARGET_CHAT = os.getenv("TARGET_CHAT")
+TARGET_CHAT = os.getenv("TARGET_CHAT")  # @proxyhub_ir
 SOURCES = [
     "https://t.me/s/proxymtprotoir",
     "https://t.me/s/iMTProto",
     "https://t.me/s/TVProxy"
 ]
 STATE_FILE = "last_proxy_messages.json"
-MAX_LEN = 3500  # طول امن پیام
 
-HEADER = (
-    "╔════════════════════╗\n"
-    "🧩 پروکسی هاب | Proxy Hub\n"
-    "╚════════════════════╝\n\n"
-)
+# پیام‌ها با حداکثر تعداد لینک در هر پیام
+MAX_LINKS_PER_MESSAGE = 25
 
+# ======== هدر و فوتر =========
+HEADER = "╔════════════════════╗\n🧩 پروکسی هاب | Proxy Hub\n╚════════════════════╝\n\n"
 def footer(ts):
-    return (
-        "\n\n╔════════════════════╗\n"
-        f"⏱ {ts}\n"
-        "📡 @proxyhub_ir\n"
-        "╚════════════════════╝"
-    )
+    return f"\n\n╔════════════════════╗\n⏱ {ts}\n📡 @proxyhub_ir\n╚════════════════════╝"
 
+# ======== مدیریت تاریخچه پیام‌ها =========
 def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r", encoding="utf-8") as f:
@@ -38,6 +33,7 @@ def save_state(state):
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f)
 
+# ======== استخراج پروکسی‌ها از کانال =========
 def fetch_channel(url):
     r = requests.get(url, timeout=20)
     r.raise_for_status()
@@ -53,37 +49,29 @@ def fetch_channel(url):
             proxies = []
             for l in links:
                 href = l['href'].strip()
+                # فقط پروکسی‌ها یا لینک‌های subscribe
                 if any(proto in href.lower() for proto in ["vmess://", "vless://", "ss://", "trojan://", "hy2://", "http", "https"]):
                     proxies.append(f'<a href="{href}">{href}</a>')
             if proxies:
                 messages.append((mid, proxies))
     return messages
 
-def build_messages(all_proxies):
+# ======== ساخت پیام‌ها با تکه‌بندی امن =========
+def build_messages_safe(all_proxies):
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     messages = []
-    cur_msg = HEADER
-    cur_len = len(cur_msg)
+    # صاف کردن همه لینک‌ها
+    flat_links = [link for proxies in all_proxies for link in proxies]
 
-    for proxies in all_proxies:
-        line = " ".join(proxies) + " "
-        if cur_len + len(line) + len(footer(now)) > MAX_LEN:
-            # پیام فعلی رو ذخیره کن
-            cur_msg = cur_msg.rstrip() + footer(now)
-            messages.append(cur_msg)
-            # شروع پیام جدید
-            cur_msg = HEADER + line
-            cur_len = len(cur_msg)
-        else:
-            cur_msg += line
-            cur_len += len(line)
-
-    if cur_msg.strip() != HEADER.strip():
-        cur_msg = cur_msg.rstrip() + footer(now)
-        messages.append(cur_msg)
+    # تقسیم به تکه‌ها
+    for i in range(0, len(flat_links), MAX_LINKS_PER_MESSAGE):
+        chunk = flat_links[i:i + MAX_LINKS_PER_MESSAGE]
+        text = HEADER + " ".join(chunk) + footer(now)
+        messages.append(text)
 
     return messages
 
+# ======== تابع اصلی =========
 async def main():
     bot = Bot(BOT_TOKEN)
     state = load_state()
@@ -104,7 +92,7 @@ async def main():
         save_state(state)
         return
 
-    messages = build_messages(all_new_proxies)
+    messages = build_messages_safe(all_new_proxies)
     for m in messages:
         await bot.send_message(
             chat_id=TARGET_CHAT,
@@ -117,5 +105,6 @@ async def main():
     save_state(state)
     print(f"✅ ارسال شد | تعداد پیام‌ها: {len(messages)}")
 
+# ======== اجرا =========
 if __name__ == "__main__":
     asyncio.run(main())

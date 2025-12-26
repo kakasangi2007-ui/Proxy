@@ -2,26 +2,45 @@ name: Run ProxyHub Bot
 
 on:
   schedule:
-    - cron: '*/30 * * * *'  # هر نیم ساعت
-  workflow_dispatch:
+    # هر ۳۰ دقیقه اجرا می‌شود
+    - cron: '*/30 * * * *'
+  workflow_dispatch:  # امکان اجرای دستی
 
 jobs:
-  fetch-proxies:
+  run-bot:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
 
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
 
-      - name: Run bot
-        env:
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          TARGET_CHAT: "@proxyhub_ir"
-        run: python bot_proxyhub.py
+    - name: Run ProxyHub Bot
+      env:
+        BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        TARGET_CHAT: "@proxyhub_ir"
+      run: python bot_proxyhub.py
+
+    - name: Save message history
+      run: |
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+        git add last_proxy_messages.json
+        if git diff --staged --quiet; then
+          echo "No new messages found"
+        else
+          git commit -m "Update last messages [skip ci]"
+          git push
+          echo "History updated successfully"
+        fi

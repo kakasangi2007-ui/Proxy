@@ -14,8 +14,7 @@ SOURCES = [
 ]
 STATE_FILE = "last_proxy_messages.json"
 
-# پیام‌ها با حداکثر تعداد لینک در هر پیام
-MAX_LINKS_PER_MESSAGE = 25
+MAX_MESSAGE_LENGTH = 3500  # طول امن برای هر پیام
 
 # ======== هدر و فوتر =========
 HEADER = "╔════════════════════╗\n🧩 پروکسی هاب | Proxy Hub\n╚════════════════════╝\n\n"
@@ -56,19 +55,22 @@ def fetch_channel(url):
                 messages.append((mid, proxies))
     return messages
 
-# ======== ساخت پیام‌ها با تکه‌بندی امن =========
-def build_messages_safe(all_proxies):
+# ======== ساخت پیام‌ها با تقسیم طول امن =========
+def build_messages_safe_by_length(all_proxies):
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     messages = []
-    # صاف کردن همه لینک‌ها
-    flat_links = [link for proxies in all_proxies for link in proxies]
-
-    # تقسیم به تکه‌ها
-    for i in range(0, len(flat_links), MAX_LINKS_PER_MESSAGE):
-        chunk = flat_links[i:i + MAX_LINKS_PER_MESSAGE]
-        text = HEADER + " ".join(chunk) + footer(now)
-        messages.append(text)
-
+    current_text = HEADER
+    for proxies in all_proxies:
+        for link in proxies:
+            if len(current_text) + len(link) + 1 + len(footer(now)) > MAX_MESSAGE_LENGTH:
+                current_text += footer(now)
+                messages.append(current_text)
+                current_text = HEADER + link + " "
+            else:
+                current_text += link + " "
+    if current_text.strip() != HEADER.strip():
+        current_text += footer(now)
+        messages.append(current_text)
     return messages
 
 # ======== تابع اصلی =========
@@ -92,7 +94,7 @@ async def main():
         save_state(state)
         return
 
-    messages = build_messages_safe(all_new_proxies)
+    messages = build_messages_safe_by_length(all_new_proxies)
     for m in messages:
         await bot.send_message(
             chat_id=TARGET_CHAT,

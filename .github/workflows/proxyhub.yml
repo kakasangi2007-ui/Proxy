@@ -24,4 +24,4 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           TARGET_CHAT: "@proxyhub_ir"
-        run: python bot_proxyhub.py
+        run: python bot_proxyhub_final.py

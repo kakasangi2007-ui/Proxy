@@ -21,11 +21,9 @@ HEADER = (
     "╔════════════════════╗\n"
     "🧩 پروکسی هاب | Proxy Hub\n"
     "╚════════════════════╝\n\n"
-    "⚡ پروکسی‌های فعال و سریع\n"
-    "📱 آیفون | اندروید | دسکتاپ\n\n"
 )
 
-# فوتر پیام
+# فوتر پیام بدون اطلاعات اضافی
 def footer(ts):
     return (
         "\n\n╔════════════════════╗\n"
@@ -58,23 +56,21 @@ def fetch_channel(url):
         if not mid:
             continue
 
-        links = []
-        for a in msg.select("a[href]"):
-            href = a["href"]
-            if "proxy?server=" in href:
-                links.append(href)
-
-        messages.append((mid, links))
+        # گرفتن متن خام پیام بدون تغییر
+        text_div = msg.select_one("div.tgme_widget_message_text")
+        if text_div:
+            text = text_div.get_text(separator="\n").strip()
+            messages.append((mid, text))
     return messages  # جدید → قدیم
 
 # ساخت پیام‌ها با هدر و فوتر و تقسیم امن
-def build_messages(links):
+def build_messages(texts):
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     messages = []
     cur = HEADER
 
-    for link in links:
-        piece = link + "\n"
+    for text in texts:
+        piece = text + "\n\n"
         if len(cur) + len(piece) + len(footer(now)) > MAX_LEN:
             cur = cur.rstrip("\n") + footer(now)
             messages.append(cur)
@@ -92,26 +88,26 @@ def build_messages(links):
 async def main():
     bot = Bot(BOT_TOKEN)
     state = load_state()
-    all_new_links = []
+    all_new_texts = []
 
     for src in SOURCES:
         last = state.get(src)
         msgs = fetch_channel(src)
 
-        for mid, links in msgs:
+        for mid, text in msgs:
             if last and mid == last:
                 break
-            all_new_links.extend(links)
+            all_new_texts.append(text)
 
         if msgs:
             state[src] = msgs[0][0]
 
-    if not all_new_links:
-        print("📭 پروکسی جدیدی نیست")
+    if not all_new_texts:
+        print("📭 هیچ پیام جدیدی نیست")
         save_state(state)
         return
 
-    messages = build_messages(all_new_links)
+    messages = build_messages(all_new_texts)
 
     for m in messages:
         await bot.send_message(
@@ -123,7 +119,7 @@ async def main():
         await asyncio.sleep(1)
 
     save_state(state)
-    print(f"✅ ارسال شد | تعداد پروکسی: {len(all_new_links)}")
+    print(f"✅ ارسال شد | تعداد پیام‌ها: {len(all_new_texts)}")
 
 # اجرا
 if __name__ == "__main__":

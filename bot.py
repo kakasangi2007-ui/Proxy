@@ -4,7 +4,6 @@ from bs4 import BeautifulSoup
 from telegram import Bot
 from telegram.constants import ParseMode
 
-# ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 TARGET_CHAT = "@proxyhub_ir"
 
@@ -17,11 +16,8 @@ SOURCES = [
 ]
 
 STATE_FILE = "state.json"
-
 PROXIES_PER_POST = 4
 MAX_POSTS = 3
-# =========================================
-
 
 def load_state():
     if os.path.exists(STATE_FILE):
@@ -32,7 +28,6 @@ def load_state():
 def save_state(state):
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False)
-
 
 def fetch_channel(url):
     r = requests.get(url, timeout=20)
@@ -49,13 +44,10 @@ def fetch_channel(url):
 
     return result
 
-
 def extract_proxies(text):
-    pattern = r'(vmess://[^\s]+|vless://[^\s]+|trojan://[^\s]+|ss://[^\s]+|ssr://[^\s]+|tg://proxy\?[^\s]+)'
+    pattern = r'(tg://proxy\?[^\s\n]+|https://t.me/proxy[^\s\n]+)'
     return re.findall(pattern, text)
 
-
-# ---------- UI ----------
 def header():
     return (
         "╔════════════════════╗\n"
@@ -88,7 +80,6 @@ def footer():
         f"⏱ {t}"
     )
 
-
 async def main():
     bot = Bot(BOT_TOKEN)
     state = load_state()
@@ -99,15 +90,20 @@ async def main():
         posts = fetch_channel(src)
 
         for mid, text in posts:
+            # فقط پیام‌های جدید
             if last and mid <= last:
-                break
-            all_new.extend(extract_proxies(text))
+                continue
+
+            proxies = extract_proxies(text)
+            if proxies:
+                all_new.extend(proxies)
 
         if posts:
-            state[src] = posts[0][0]
+            state[src] = posts[0][0]  # ذخیره آخرین پیام بررسی‌شده
 
+    # اگر پروکسی جدیدی نبود هیچ پستی ارسال نشه
     if not all_new:
-        print("📭 پروکسی جدیدی نبود")
+        print("📭 پیام جدیدی با پروکسی پیدا نشد")
         save_state(state)
         return
 
@@ -135,8 +131,7 @@ async def main():
         await asyncio.sleep(1)
 
     save_state(state)
-    print(f"✅ ارسال شد | پست‌ها: {sent}")
-
+    print(f"✅ ارسال شد | تعداد پست: {sent}")
 
 if __name__ == "__main__":
     asyncio.run(main())

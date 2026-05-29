@@ -1,296 +1,261 @@
-import os
-import json
-import re
-import datetime
-import asyncio
+import os,re,json,asyncio,datetime,ipaddress
+from urllib.parse import unquote
 import aiohttp
-import ipaddress
-
 from bs4 import BeautifulSoup
 from telegram import Bot
 from telegram.constants import ParseMode
 from telegram.error import RetryAfter
 
-# ================= CONFIG =================
+BOT_TOKEN=os.getenv("BOT_TOKEN")
+TARGET_CHAT=os.getenv("TARGET_CHAT")
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-TARGET_CHAT = os.getenv("TARGET_CHAT")
+SOURCE_URL="https://t.me/s/ProxysHUB"
+STATE_FILE="state.json"
 
-SOURCE_URL = "https://t.me/s/ProxysHUB"
+CHANNEL_USERNAME="@proxyhub_ir"
 
-STATE_FILE = "state.json"
+MAX_PROXIES=10
+MAX_LEN=3500
 
-CHANNEL_USERNAME = "@proxyhub_ir"
-
-MAX_PROXIES_PER_RUN = 10
-MAX_MESSAGE_LEN = 3000
-
-# ==========================================
-
-HEADER = """
+HEADER="""
 🔥 <b>پروکسی‌های جدید تلگرام</b> 🔥
 
-┏━━━━━━━━━━━━━━━━━━┓
+┏━━━━━━━━━━━━━━━━━━━━━━┓
 ┃ 🚀 سریع و پایدار
 ┃ 🔒 رایگان
 ┃ ⚡ آماده اتصال
-┗━━━━━━━━━━━━━━━━━━┛
-
+┗━━━━━━━━━━━━━━━━━━━━━━┛
 """
 
 def footer():
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-
     return f"""
 
-╭━━━━━━━━━━━━━━━━━━╮
-┃ 📅 {now}
+╭━━━━━━━━━━━━━━━━━━━━━━╮
+┃ 📅 {datetime.datetime.now().strftime("%Y-%m-%d %H:%M")}
 ┃ 📢 {CHANNEL_USERNAME}
 ┃ 💡 روی لینک بزنید
-╰━━━━━━━━━━━━━━━━━━╯
+╰━━━━━━━━━━━━━━━━━━━━━━╯
 
 #MTProto #Proxy
 """
 
-# ==========================================
-
 def load_state():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-
-    return {
-        "last_post": 0,
-        "sent": []
-    }
-
-def save_state(state):
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False)
-
-# ==========================================
-
-def valid_ip_port(proxy):
-
     try:
-        ip_port = proxy.split("@")[-1]
+        with open(STATE_FILE,"r",encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return {"last_post":0,"sent":[]}
 
-        if ":" not in ip_port:
-            return True
+def save_state(s):
+    with open(STATE_FILE,"w",encoding="utf-8") as f:
+        json.dump(s,f,ensure_ascii=False,indent=2)
 
-        ip, port = ip_port.split(":")[:2]
+def norm(x):
+    return unquote(x.replace("&amp;","&").strip()) if x else None
 
+def valid(proxy):
+    try:
+        if proxy.startswith(("tg://proxy?","https://t.me/proxy?")):
+            return all(x in proxy for x in ["server=","port=","secret="])
+
+        ip,port=proxy.split(":")[:2]
         ipaddress.ip_address(ip)
-
-        port = int(port)
-
-        return 1 <= port <= 65535
+        return 1<=int(port)<=65535
 
     except:
         return False
 
-# ==========================================
+async def fetch():
 
-async def fetch_channel():
+    async with aiohttp.ClientSession(
+        headers={"User-Agent":"Mozilla/5.0"},
+        timeout=aiohttp.ClientTimeout(total=20)
+    ) as s:
 
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
+        async with s.get(SOURCE_URL) as r:
 
-    async with aiohttp.ClientSession(headers=headers) as session:
+            html=await r.text()
 
-        async with session.get(SOURCE_URL, timeout=20) as r:
+    soup=BeautifulSoup(html,"html.parser")
 
-            html = await r.text()
+    data=[]
 
-    soup = BeautifulSoup(html, "html.parser")
+    for p in soup.select("div.tgme_widget_message"):
 
-    posts = soup.select("div.tgme_widget_message")
+        pid=p.get("data-post")
 
-    results = []
-
-    for post in posts:
-
-        post_id = post.get("data-post")
-
-        if not post_id:
+        if not pid:
             continue
 
         try:
-            post_num = int(post_id.split("/")[-1])
+            pid=int(pid.split("/")[-1])
         except:
             continue
 
-        proxies = []
+        proxies=set()
 
-        # گرفتن لینک دکمه Connect
-        buttons = post.select("a")
+        for a in p.find_all("a",href=True):
 
-        for btn in buttons:
+            h=norm(a["href"])
 
-            href = btn.get("href", "")
+            if h and ("proxy?" in h):
+                proxies.add(h)
 
-            if not href:
-                continue
+        html=str(p)
 
-            if (
-                "t.me/proxy?" in href
-                or "tg://proxy?" in href
-            ):
+        rg=re.findall(
+            r'(https:\/\/t\.me\/proxy\?[^\s"\']+|tg:\/\/proxy\?[^\s"\']+)',
+            html
+        )
 
-                proxies.append(href)
+        for x in rg:
 
-        results.append({
-            "id": post_num,
-            "proxies": list(dict.fromkeys(proxies))
+            x=norm(x)
+
+            if x:
+                proxies.add(x)
+
+        proxies=[x for x in proxies if valid(x)]
+
+        data.append({
+            "id":pid,
+            "proxies":proxies
         })
 
-    return results
+    return data
 
-# ==========================================
+def build(proxies):
 
-def format_proxy(proxy, index):
+    msgs=[]
 
-    return f"""
-┣━━ 📍 <b>پروکسی {index}</b>
-┃ 🔗 <code>{proxy}</code>
+    for i in range(0,len(proxies),5):
+
+        text=HEADER
+
+        for n,p in enumerate(proxies[i:i+5],start=i+1):
+
+            text+=f"""
+┣━━ 📍 <b>پروکسی {n}</b>
+┃ 🔗 <code>{p}</code>
 ┃ ✅ فعال
 ┃
 """
 
-# ==========================================
+        text+="╰━━━━━━━━━━━━━━━━━━━━━━╯"
+        text+=footer()
 
-def build_messages(proxies):
+        if len(text)<MAX_LEN:
+            msgs.append(text)
 
-    messages = []
+    return msgs
 
-    for i in range(0, len(proxies), 5):
+async def send(bot,msgs):
 
-        chunk = proxies[i:i+5]
-
-        text = HEADER
-
-        for idx, proxy in enumerate(chunk, start=i+1):
-
-            text += format_proxy(proxy, idx)
-
-        text += "╰━━━━━━━━━━━━━━━━━━╯"
-
-        text += footer()
-
-        if len(text) < MAX_MESSAGE_LEN:
-            messages.append(text)
-
-    return messages
-
-# ==========================================
-
-async def send_messages(bot, messages):
-
-    for i, msg in enumerate(messages, 1):
+    for i,m in enumerate(msgs,1):
 
         try:
 
             await bot.send_message(
                 chat_id=TARGET_CHAT,
-                text=msg,
+                text=m,
                 parse_mode=ParseMode.HTML,
                 disable_web_page_preview=True
             )
 
-            print(f"✅ Sent {i}/{len(messages)}")
+            print(f"✅ Sent {i}/{len(msgs)}")
 
             await asyncio.sleep(2)
 
         except RetryAfter as e:
 
-            print(f"⏳ FloodWait {e.retry_after}")
-
-            await asyncio.sleep(e.retry_after)
+            await asyncio.sleep(int(e.retry_after)+1)
 
         except Exception as e:
 
-            print("❌", e)
-
-# ==========================================
+            print("❌",e)
 
 async def main():
 
     if not BOT_TOKEN or not TARGET_CHAT:
+        return print("❌ ENV missing")
 
-        print("❌ ENV not set")
+    state=load_state()
 
-        return
-
-    bot = Bot(BOT_TOKEN)
-
-    state = load_state()
-
-    sent = set(state.get("sent", []))
-
-    last_post = state.get("last_post", 0)
+    last=int(state.get("last_post",0))
+    sent=set(state.get("sent",[]))
 
     print("🔍 Fetching...")
 
-    posts = await fetch_channel()
+    try:
+        posts=await fetch()
+    except Exception as e:
+        return print("❌ Fetch error:",e)
 
     if not posts:
+        return print("📭 No posts")
 
-        print("❌ No posts")
+    posts.sort(key=lambda x:x["id"])
 
-        return
-
-    new_proxies = []
-
-    newest_post = last_post
+    newest=last
+    new=[]
 
     for post in posts:
 
-        if post["id"] > newest_post:
-            newest_post = post["id"]
+        pid=post["id"]
 
-        if post["id"] <= last_post:
+        if pid>newest:
+            newest=pid
+
+        if pid<=last:
             continue
 
-        for proxy in post["proxies"]:
+        for p in post["proxies"]:
 
-            if proxy in sent:
+            p=norm(p)
+
+            if not p or p in sent or not valid(p):
                 continue
 
-            if not valid_ip_port(proxy):
-                continue
+            sent.add(p)
+            new.append(p)
 
-            sent.add(proxy)
-
-            new_proxies.append(proxy)
-
-    if not new_proxies:
+    if not new:
 
         print("📭 No new proxies")
 
-        state["last_post"] = newest_post
+        state["last_post"]=newest
+
         save_state(state)
 
         return
 
-    # فقط آخرین 10 تا
-    new_proxies = new_proxies[-MAX_PROXIES_PER_RUN:]
+    new=new[-MAX_PROXIES:]
 
-    print(f"📡 {len(new_proxies)} proxies found")
+    print(f"📡 Found {len(new)} proxies")
 
-    messages = build_messages(new_proxies)
+    msgs=build(new)
 
-    await send_messages(bot, messages)
+    if not msgs:
+        return print("❌ No valid messages")
 
-    state["last_post"] = newest_post
-    state["sent"] = list(sent)[-5000:]
+    bot=Bot(BOT_TOKEN)
+
+    await send(bot,msgs)
+
+    state["last_post"]=newest
+    state["sent"]=list(sent)[-5000:]
 
     save_state(state)
 
     print("🎉 Done")
 
-# ==========================================
+if __name__=="__main__":
 
-if __name__ == "__main__":
+    try:
+        asyncio.run(main())
 
-    asyncio.run(main())
+    except KeyboardInterrupt:
+        print("⛔ Stopped")
+
+    except Exception as e:
+        print("❌ Fatal:",e)

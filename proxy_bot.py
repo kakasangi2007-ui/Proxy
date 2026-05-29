@@ -136,7 +136,7 @@ def build(proxies):
 
             text+=f"""
 ┣━━ 📍 <b>پروکسی {n}</b>
-┃ 🔗 <code>{p}</code>
+┃ 🔗 {p}
 ┃ ✅ فعال
 ┃
 """

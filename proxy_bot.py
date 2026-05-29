@@ -1,195 +1,296 @@
-import os, json, re, datetime, asyncio
-import requests
+import os
+import json
+import re
+import datetime
+import asyncio
+import aiohttp
+import ipaddress
+
 from bs4 import BeautifulSoup
 from telegram import Bot
 from telegram.constants import ParseMode
+from telegram.error import RetryAfter
 
-# ================== CONFIG ==================
+# ================= CONFIG =================
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-TARGET_CHAT = os.getenv("TARGET_CHAT")  # میتونه @proxyhub_ir باشه
+TARGET_CHAT = os.getenv("TARGET_CHAT")
 
 SOURCE_URL = "https://t.me/s/ProxysHUB"
-STATE_FILE = "last_messages.json"
-MAX_LEN = 3800
-MAX_PROXIES_PER_RUN = 10  # حداکثر 10 پروکسی
+
+STATE_FILE = "state.json"
 
 CHANNEL_USERNAME = "@proxyhub_ir"
-# ===========================================
 
-# قالب خفن
-HEADER = (
-    "🔥 **پروکسی‌های تلگرام - تازه‌ترین‌ها** 🔥\n\n"
-    "┏━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
-    "┃ **🚀 آماده استفاده در تلگرام**\n"
-    "┃ **⚡ سرعت بالا | پایدار**\n"
-    "┃ **🔒 کاملاً رایگان**\n"
-    "┗━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n\n"
-    "📡 **پروکسی‌های امروز:**\n\n"
-)
+MAX_PROXIES_PER_RUN = 10
+MAX_MESSAGE_LEN = 3000
 
-def footer(ts: str) -> str:
-    return (
-        f"\n\n"
-        f"╭━━━━━━━━━━━━━━━━━━━━━━━━━━╮\n"
-        f"┃ 📅 {ts}\n"
-        f"┃ 📢 {CHANNEL_USERNAME}\n"
-        f"┃ 💡 **نصب**: کافیست روی لینک کلیک کنید\n"
-        f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━╯\n\n"
-        f"#پروکسی_تلگرام #MTProto #رایگان"
-    )
+# ==========================================
+
+HEADER = """
+🔥 <b>پروکسی‌های جدید تلگرام</b> 🔥
+
+┏━━━━━━━━━━━━━━━━━━┓
+┃ 🚀 سریع و پایدار
+┃ 🔒 رایگان
+┃ ⚡ آماده اتصال
+┗━━━━━━━━━━━━━━━━━━┛
+
+"""
+
+def footer():
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    return f"""
+
+╭━━━━━━━━━━━━━━━━━━╮
+┃ 📅 {now}
+┃ 📢 {CHANNEL_USERNAME}
+┃ 💡 روی لینک بزنید
+╰━━━━━━━━━━━━━━━━━━╯
+
+#MTProto #Proxy
+"""
+
+# ==========================================
 
 def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {}
+
+    return {
+        "last_post": 0,
+        "sent": []
+    }
 
 def save_state(state):
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False)
 
-def fetch_channel():
+# ==========================================
+
+def valid_ip_port(proxy):
+
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        r = requests.get(SOURCE_URL, timeout=20, headers=headers)
-        r.raise_for_status()
+        ip_port = proxy.split("@")[-1]
 
-        soup = BeautifulSoup(r.text, "html.parser")
-        posts = soup.select("div.tgme_widget_message")
+        if ":" not in ip_port:
+            return True
 
-        messages = []
-        for p in posts:
-            mid = p.get("data-post")
-            if not mid:
-                continue
-            text = p.get_text("\n", strip=True)
-            messages.append((mid, text))
+        ip, port = ip_port.split(":")[:2]
 
-        return messages
-    except Exception as e:
-        print(f"Error: {e}")
-        return []
+        ipaddress.ip_address(ip)
 
-def extract_proxies(text):
-    """استخراج پروکسی‌های MTProto و سایر فرمت‌ها"""
-    mtproto_pattern = r'https?://t\.me/proxy\?[^\s<>"\']+'
-    mtproto_proxies = re.findall(mtproto_pattern, text)
-    
-    other_pattern = r'[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}:[0-9]+'
-    other_proxies = re.findall(other_pattern, text)
-    
-    all_proxies = mtproto_proxies + other_proxies
-    return list(dict.fromkeys(all_proxies))
+        port = int(port)
 
-def is_valid_proxy(proxy):
-    if not proxy:
+        return 1 <= port <= 65535
+
+    except:
         return False
-    
-    if proxy.startswith('https://t.me/proxy?'):
-        return 'server=' in proxy and 'port=' in proxy
-    
-    if re.match(r'[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}:[0-9]+', proxy):
+
+# ==========================================
+
+async def fetch_channel():
+
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
+
+    async with aiohttp.ClientSession(headers=headers) as session:
+
+        async with session.get(SOURCE_URL, timeout=20) as r:
+
+            html = await r.text()
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    posts = soup.select("div.tgme_widget_message")
+
+    results = []
+
+    for post in posts:
+
+        post_id = post.get("data-post")
+
+        if not post_id:
+            continue
+
         try:
-            ip, port = proxy.split(':')
-            parts = list(map(int, ip.split('.')))
-            port = int(port)
-            if all(0 <= p <= 255 for p in parts) and 1 <= port <= 65535:
-                return True
+            post_num = int(post_id.split("/")[-1])
         except:
-            pass
-    return False
+            continue
+
+        proxies = []
+
+        # گرفتن لینک دکمه Connect
+        buttons = post.select("a")
+
+        for btn in buttons:
+
+            href = btn.get("href", "")
+
+            if not href:
+                continue
+
+            if (
+                "t.me/proxy?" in href
+                or "tg://proxy?" in href
+            ):
+
+                proxies.append(href)
+
+        results.append({
+            "id": post_num,
+            "proxies": list(dict.fromkeys(proxies))
+        })
+
+    return results
+
+# ==========================================
 
 def format_proxy(proxy, index):
-    """فرمت‌دهی خفن برای هر پروکسی"""
-    if proxy.startswith('https://t.me/proxy?'):
-        return f"┣━━ 📍 **پروکسی {index}**\n┃   🔗 `{proxy}`\n┃   ✅ وضعیت: فعال\n"
-    else:
-        return f"┣━━ 📍 **پروکسی {index}**\n┃   🔗 `{proxy}`\n┃   📝 نوع: SOCKS/HTTP\n"
+
+    return f"""
+┣━━ 📍 <b>پروکسی {index}</b>
+┃ 🔗 <code>{proxy}</code>
+┃ ✅ فعال
+┃
+"""
+
+# ==========================================
 
 def build_messages(proxies):
-    """ساخت پیام‌های نهایی با قالب جدید"""
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
     messages = []
-    
-    for i in range(0, len(proxies), 5):  # هر پیام حداکثر 5 پروکسی
-        msg = HEADER
-        for j, proxy in enumerate(proxies[i:i+5], start=i+1):
-            msg += format_proxy(proxy, j)
-            msg += "┃\n"
-        
-        msg += "╰━━━━━━━━━━━━━━━━━━━━━━━━━━╯\n"
-        msg += footer(now)
-        
-        if len(msg) > MAX_LEN:
-            for proxy in proxies[i:i+5]:
-                single_msg = HEADER + format_proxy(proxy, 1) + "╰━━━━━━━━━━━━━━━━━━━━━━━━━━╯\n" + footer(now)
-                messages.append(single_msg)
-        else:
-            messages.append(msg)
-    
+
+    for i in range(0, len(proxies), 5):
+
+        chunk = proxies[i:i+5]
+
+        text = HEADER
+
+        for idx, proxy in enumerate(chunk, start=i+1):
+
+            text += format_proxy(proxy, idx)
+
+        text += "╰━━━━━━━━━━━━━━━━━━╯"
+
+        text += footer()
+
+        if len(text) < MAX_MESSAGE_LEN:
+            messages.append(text)
+
     return messages
 
-async def main():
-    if not BOT_TOKEN or not TARGET_CHAT:
-        print("BOT_TOKEN or TARGET_CHAT not set!")
-        return
+# ==========================================
 
-    bot = Bot(BOT_TOKEN)
-    state = load_state()
-    all_new_proxies = []
-    last_id = state.get("last_id")
-
-    print("🔍 Fetching from ProxysHUB...")
-    posts = fetch_channel()
-
-    if not posts:
-        print("❌ No posts found")
-        return
-
-    # جمع‌آوری همه پروکسی‌های جدید
-    for mid, text in posts:
-        if last_id and mid <= last_id:
-            break
-        
-        proxies = extract_proxies(text)
-        for proxy in proxies:
-            if is_valid_proxy(proxy) and proxy not in all_new_proxies:
-                all_new_proxies.append(proxy)
-
-    if posts:
-        state["last_id"] = posts[0][0]
-
-    if not all_new_proxies:
-        print("📭 No new proxies found")
-        save_state(state)
-        return
-
-    # گرفتن آخرین 10 پروکسی (جدیدترین‌ها)
-    original_count = len(all_new_proxies)
-    if len(all_new_proxies) > MAX_PROXIES_PER_RUN:
-        all_new_proxies = all_new_proxies[-MAX_PROXIES_PER_RUN:]  # آخرین 10 تا
-        print(f"📊 Found {original_count} total, sending last {len(all_new_proxies)} proxies")
-    else:
-        print(f"📊 Found {len(all_new_proxies)} new proxies")
-
-    messages = build_messages(all_new_proxies)
-    print(f"📨 Sending {len(messages)} messages")
+async def send_messages(bot, messages):
 
     for i, msg in enumerate(messages, 1):
+
         try:
+
             await bot.send_message(
                 chat_id=TARGET_CHAT,
                 text=msg,
-                parse_mode=ParseMode.MARKDOWN,
-                disable_web_page_preview=False
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True
             )
-            print(f"✅ Sent message {i}/{len(messages)}")
+
+            print(f"✅ Sent {i}/{len(messages)}")
+
             await asyncio.sleep(2)
+
+        except RetryAfter as e:
+
+            print(f"⏳ FloodWait {e.retry_after}")
+
+            await asyncio.sleep(e.retry_after)
+
         except Exception as e:
-            print(f"❌ Failed: {e}")
+
+            print("❌", e)
+
+# ==========================================
+
+async def main():
+
+    if not BOT_TOKEN or not TARGET_CHAT:
+
+        print("❌ ENV not set")
+
+        return
+
+    bot = Bot(BOT_TOKEN)
+
+    state = load_state()
+
+    sent = set(state.get("sent", []))
+
+    last_post = state.get("last_post", 0)
+
+    print("🔍 Fetching...")
+
+    posts = await fetch_channel()
+
+    if not posts:
+
+        print("❌ No posts")
+
+        return
+
+    new_proxies = []
+
+    newest_post = last_post
+
+    for post in posts:
+
+        if post["id"] > newest_post:
+            newest_post = post["id"]
+
+        if post["id"] <= last_post:
+            continue
+
+        for proxy in post["proxies"]:
+
+            if proxy in sent:
+                continue
+
+            if not valid_ip_port(proxy):
+                continue
+
+            sent.add(proxy)
+
+            new_proxies.append(proxy)
+
+    if not new_proxies:
+
+        print("📭 No new proxies")
+
+        state["last_post"] = newest_post
+        save_state(state)
+
+        return
+
+    # فقط آخرین 10 تا
+    new_proxies = new_proxies[-MAX_PROXIES_PER_RUN:]
+
+    print(f"📡 {len(new_proxies)} proxies found")
+
+    messages = build_messages(new_proxies)
+
+    await send_messages(bot, messages)
+
+    state["last_post"] = newest_post
+    state["sent"] = list(sent)[-5000:]
 
     save_state(state)
-    print("🎉 Job completed successfully")
+
+    print("🎉 Done")
+
+# ==========================================
 
 if __name__ == "__main__":
+
     asyncio.run(main())
